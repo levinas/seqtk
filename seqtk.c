@@ -1030,6 +1030,59 @@ int stk_seq(int argc, char *argv[])
 	return 0;
 }
 
+#define MAX_READ_LEN 1000
+int stk_stat(int argc, char *argv[])
+{
+	gzFile fp;
+	kseq_t *seq;
+    int c, flag = 0, i, n = 0, min = MAX_READ_LEN, max = 0, median = 0;
+    uint64_t min_cnt = 0, max_cnt = 0;
+    uint64_t cnt[MAX_READ_LEN], sum = 0;
+    
+	while ((c = getopt(argc, argv, "v")) >= 0) {
+		switch (c) {
+            case 'v': flag |= 1; break;
+        }
+    }
+	if (argc == optind) {
+		fprintf(stderr, "\n");
+		fprintf(stderr, "Usage:   seqtk stat [options] <in.fq>|<in.fa>\n\n");
+		fprintf(stderr, "Options: -n INT     histogram interval [50]\n");
+		fprintf(stderr, "Options: -v         show counts for all read lengths\n");
+		fprintf(stderr, "\n");
+		return 1;
+	}
+
+    memset(cnt, 0, sizeof(uint64_t) * MAX_READ_LEN);
+    
+	fp = strcmp(argv[optind], "-")? gzopen(argv[optind], "r") : gzdopen(fileno(stdin), "r");
+	seq = kseq_init(fp);
+	while (kseq_read(seq) >= 0) {
+        int len = seq->seq.l;
+        cnt[len]++;
+        if (len > max) { max = len; max_cnt = 0 }
+        if (len < min) { min = len; min_cnt = 0 }
+        if (len == max) max_cnt++;
+        if (len == max) max_cnt++;
+        n++;
+    }
+
+    for (i = min; i <= max; ++i) {
+        if (cnt[i] == 0) continue;
+        if (flag & 1) printf("%d\t%lld\n", i, cnt[i]);
+        if (sum < n/2 && sum + cnt[i] >= n/2) median = i;
+        sum += cnt[i];
+    }
+
+    printf("        read_len  count\n");
+    /* printf("min   %d %lld */
+    printf("min = %d, median = %d, max = %d\n", min, median, max);
+
+	kseq_destroy(seq);
+	gzclose(fp);
+	return 0;
+}
+
 /* main function */
 static int usage()
 {
@@ -1047,6 +1100,7 @@ static int usage()
 	fprintf(stderr, "         randbase  choose a random base from hets\n");
 	fprintf(stderr, "         cutN      cut sequence at long N\n");
 	fprintf(stderr, "         listhet   extract the position of each het\n");
+	fprintf(stderr, "         stat      get basic read statisticsn");
 	fprintf(stderr, "\n");
 	return 1;
 }
@@ -1067,6 +1121,7 @@ int main(int argc, char *argv[])
 	else if (strcmp(argv[1], "hrun") == 0) stk_hrun(argc-1, argv+1);
 	else if (strcmp(argv[1], "sample") == 0) stk_sample(argc-1, argv+1);
 	else if (strcmp(argv[1], "seq") == 0) stk_seq(argc-1, argv+1);
+	else if (strcmp(argv[1], "stat") == 0) stk_stat(argc-1, argv+1);
 	else {
 		fprintf(stderr, "[main] unrecognized commad '%s'. Abort!\n", argv[1]);
 		return 1;
