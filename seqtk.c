@@ -32,6 +32,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include <math.h>
+#include <inttypes.h>
 
 #include "kseq.h"
 KSEQ_INIT(gzFile, gzread)
@@ -173,6 +174,37 @@ void stk_printseq(const kseq_t *s, int line_len)
 		stk_printstr(&s->qual, line_len);
 	}
 }
+
+static void stk_printstr_n(const kstring_t *s, unsigned line_len, size_t n)
+{
+	if (line_len != UINT_MAX || n > 0) {
+		int i, rest = (n < s->l) ? n : s->l;
+		for (i = 0; i < s->l; i += line_len, rest -= line_len) {
+			putchar('\n');
+			if (rest > line_len) fwrite(s->s + i, 1, line_len, stdout);
+			else fwrite(s->s + i, 1, rest, stdout);
+		}
+		putchar('\n');
+	} else {
+		putchar('\n');
+		puts(s->s);
+	}
+}
+
+void stk_printseq_n(const kseq_t *s, int line_len, size_t n)
+{
+	putchar(s->qual.l? '@' : '>');
+	fputs(s->name.s, stdout);
+	if (s->comment.l) {
+		putchar(' '); fputs(s->comment.s, stdout);
+	}
+	stk_printstr_n(&s->seq, line_len, n);
+	if (s->qual.l) {
+		putchar('+');
+		stk_printstr_n(&s->qual, line_len, n);
+	}
+}
+
 
 /* quality based trimming with Mott's algorithm */
 int stk_trimfq(int argc, char *argv[])
@@ -945,17 +977,19 @@ int stk_seq(int argc, char *argv[])
 	kseq_t *seq;
 	int c, qual_thres = 0, flag = 0, qual_shift = 33, mask_chr = 0, min_len = 0;
 	unsigned line_len = 0;
+    size_t last_base = 0;
 	double frac = 1.;
 	khash_t(reg) *h = 0;
 
 	srand48(11);
-	while ((c = getopt(argc, argv, "q:l:Q:aACrn:s:f:M:L:c")) >= 0) {
+	while ((c = getopt(argc, argv, "q:l:Q:aACrUn:s:f:M:L:N:c")) >= 0) {
 		switch (c) {
 			case 'a':
 			case 'A': flag |= 1; break;
 			case 'C': flag |= 2; break;
 			case 'r': flag |= 4; break;
 			case 'c': flag |= 8; break;
+            case 'U': flag |= 16; break;
 			case 'M': h = stk_reg_read(optarg); break;
 			case 'n': mask_chr = *optarg; break;
 			case 'Q': qual_shift = atoi(optarg); break;
@@ -964,8 +998,10 @@ int stk_seq(int argc, char *argv[])
 			case 'L': min_len = atoi(optarg); break;
 			case 's': srand48(atoi(optarg)); break;
 			case 'f': frac = atof(optarg); break;
+			case 'N': last_base = strtoull(optarg, NULL, 0); break;
 		}
 	}
+    
 	if (argc == optind) {
 		fprintf(stderr, "\n");
 		fprintf(stderr, "Usage:   seqtk seq [options] <in.fq>|<in.fa>\n\n");
@@ -977,6 +1013,8 @@ int stk_seq(int argc, char *argv[])
 		fprintf(stderr, "         -f FLOAT  sample FLOAT fraction of sequences [1]\n");
 		fprintf(stderr, "         -M FILE   mask regions in BED or name list FILE [null]\n");
 		fprintf(stderr, "         -L INT    drop sequences with length shorter than INT [0]\n");
+		fprintf(stderr, "         -N INT    last base to keep; default is entire read [0]\n");
+		fprintf(stderr, "         -U        drop sequences with uncertain base N\n");
 		fprintf(stderr, "         -c        mask complement region (effective with -M)\n");
 		fprintf(stderr, "         -r        reverse complement\n");
 		fprintf(stderr, "         -A        force FASTA output (discard quality)\n");
@@ -991,6 +1029,7 @@ int stk_seq(int argc, char *argv[])
 	while (kseq_read(seq) >= 0) {
 		if (seq->seq.l < min_len) continue; // NB: length filter before taking random
 		if (frac < 1. && drand48() >= frac) continue;
+        if (flag & 16 && strchr(seq->seq.s, 'N')) continue;
 		if (seq->qual.l && qual_thres > qual_shift) {
 			unsigned i;
 			if (mask_chr) {
@@ -1022,7 +1061,8 @@ int stk_seq(int argc, char *argv[])
 					c0 = seq->qual.s[i], seq->qual.s[i] = seq->qual.s[seq->qual.l - 1 - i], seq->qual.s[seq->qual.l - 1 - i] = c0;
 			}
 		}
-		stk_printseq(seq, line_len);
+		/* stk_printseq(seq, line_len); */
+		stk_printseq_n(seq, line_len, last_base);
 	}
 	kseq_destroy(seq);
 	gzclose(fp);
@@ -1060,8 +1100,8 @@ int stk_stat(int argc, char *argv[])
 	while (kseq_read(seq) >= 0) {
         int len = seq->seq.l;
         cnt[len]++;
-        if (len > max) { max = len; max_cnt = 0 }
-        if (len < min) { min = len; min_cnt = 0 }
+        if (len > max) { max = len; max_cnt = 0; }
+        if (len < min) { min = len; min_cnt = 0; }
         if (len == max) max_cnt++;
         if (len == max) max_cnt++;
         n++;
@@ -1069,7 +1109,7 @@ int stk_stat(int argc, char *argv[])
 
     for (i = min; i <= max; ++i) {
         if (cnt[i] == 0) continue;
-        if (flag & 1) printf("%d\t%lld\n", i, cnt[i]);
+        if (flag & 1) printf("%d\t%" PRIu64 "\n", i, cnt[i]);
         if (sum < n/2 && sum + cnt[i] >= n/2) median = i;
         sum += cnt[i];
     }
