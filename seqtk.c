@@ -178,8 +178,9 @@ void stk_printseq(const kseq_t *s, int line_len)
 static void stk_printstr_n(const kstring_t *s, unsigned line_len, size_t n)
 {
 	if (line_len != UINT_MAX || n > 0) {
-		int i, rest = (n < s->l) ? n : s->l;
-		for (i = 0; i < s->l; i += line_len, rest -= line_len) {
+        size_t len = (n < s->l) ? n : s->l;
+		int i, rest = len;
+		for (i = 0; i < len; i += line_len, rest -= line_len) {
 			putchar('\n');
 			if (rest > line_len) fwrite(s->s + i, 1, line_len, stdout);
 			else fwrite(s->s + i, 1, rest, stdout);
