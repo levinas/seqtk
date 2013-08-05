@@ -1071,54 +1071,121 @@ int stk_seq(int argc, char *argv[])
 	return 0;
 }
 
-#define MAX_READ_LEN 1000
+    
+int compare_int(const void * a, const void * b)
+{
+    return *(int*)a - *(int*)b;
+}
+
+int calc_median(int * array, int size)
+{
+    int mid = size / 2;
+    if (size % 2 == 0) return (array[mid-1] + array[mid]) / 2;
+    else return array[mid];
+}
+
+KHASH_MAP_INIT_INT(cnt, uint64_t);
 int stk_stat(int argc, char *argv[])
 {
 	gzFile fp;
 	kseq_t *seq;
-    int c, flag = 0, i, n = 0, min = MAX_READ_LEN, max = 0, median = 0;
-    uint64_t min_cnt = 0, max_cnt = 0;
-    uint64_t cnt[MAX_READ_LEN], sum = 0;
+    int c, i, ret, flag = 0, n = 0, n250 = 0, n500 = 0, n1k = 0, uniq_lens = 0;
+    int min, max, median, N50 = 0;
+    uint64_t min_cnt, max_cnt, gc = 0, uncertain = 0, total_len = 0, sum = 0, len250 = 0, len500 = 0, len1k = 0;
+    kh_cnt_t *h = kh_init(cnt);
+    khiter_t k;
     
-	while ((c = getopt(argc, argv, "v")) >= 0) {
+	while ((c = getopt(argc, argv, "vs")) >= 0) {
 		switch (c) {
             case 'v': flag |= 1; break;
+            case 's': flag |= 2; break;
         }
     }
 	if (argc == optind) {
 		fprintf(stderr, "\n");
 		fprintf(stderr, "Usage:   seqtk stat [options] <in.fq>|<in.fa>\n\n");
 		fprintf(stderr, "Options: -n INT     histogram interval [50]\n");
+		fprintf(stderr, "Options: -s         simple one line stats: # seqs (>= 500bp), total length, N50, GC\n");
 		fprintf(stderr, "Options: -v         show counts for all read lengths\n");
 		fprintf(stderr, "\n");
 		return 1;
 	}
 
-    memset(cnt, 0, sizeof(uint64_t) * MAX_READ_LEN);
-    
-	fp = strcmp(argv[optind], "-")? gzopen(argv[optind], "r") : gzdopen(fileno(stdin), "r");
+	fp = strcmp(argv[optind], "-") ? gzopen(argv[optind], "r") : gzdopen(fileno(stdin), "r");
 	seq = kseq_init(fp);
 	while (kseq_read(seq) >= 0) {
         int len = seq->seq.l;
-        cnt[len]++;
-        if (len > max) { max = len; max_cnt = 0; }
-        if (len < min) { min = len; min_cnt = 0; }
-        if (len == max) max_cnt++;
-        if (len == max) max_cnt++;
+        total_len += len;
+        k = kh_get(cnt, h, len);
+        if (k == kh_end(h)) {
+            k = kh_put(cnt, h, len, &ret);
+            kh_value(h, k) = 1;
+            ++uniq_lens;
+        } else kh_value(h, k)++;
+        for (i = 0; i < len; ++i) {
+            if (seq->seq.s[i] == 'G' || seq->seq.s[i] == 'C' ||
+                seq->seq.s[i] == 'g' || seq->seq.s[i] == 'c' ) gc++;
+            if (seq->seq.s[i] == 'N') uncertain++;
+        }
         n++;
+        if (len >= 250) { n250++; len250 += len; }
+        if (len >= 500) { n500++; len500 += len; }
+        if (len >= 1000) { n1k++; len1k += len; }
     }
 
-    for (i = min; i <= max; ++i) {
-        if (cnt[i] == 0) continue;
-        if (flag & 1) printf("%d\t%" PRIu64 "\n", i, cnt[i]);
-        if (sum < n/2 && sum + cnt[i] >= n/2) median = i;
-        sum += cnt[i];
+    int* cnt_keys = calloc(uniq_lens, sizeof(int));
+    uint64_t* cnt_vals = calloc(uniq_lens, sizeof(uint64_t));
+
+	for (i = 0, k = kh_begin(h); k != kh_end(h); ++k) {
+		if (kh_exist(h, k)) cnt_keys[i++] = kh_key(h, k);
+    }
+    qsort(cnt_keys, uniq_lens, sizeof(int), compare_int);
+    
+    min = cnt_keys[0];
+    max = cnt_keys[uniq_lens-1];
+    min_cnt = kh_value(h, kh_get(cnt, h, min));
+    max_cnt = kh_value(h, kh_get(cnt, h, min));
+    median = calc_median(cnt_keys, uniq_lens);
+
+    for (i = uniq_lens - 1; i >= 0; --i) {
+        int len = cnt_keys[i];
+        k = kh_get(cnt, h, len);
+        uint64_t v = kh_value(h, k);
+        if (v == 0) continue;
+        if (flag & 1) printf("%d\t%" PRIu64 "\n", i, v);
+        if (N50 == 0) {
+            if (sum < total_len/2 && sum + v * len >= total_len/2) N50 = len;
+            sum += v * len;
+        }
     }
 
-    printf("        read_len  count\n");
-    /* printf("min   %d %lld */
-    printf("min = %d, median = %d, max = %d\n", min, median, max);
+    if (flag & 2) {
+        printf("%d\t%" PRIu64 "\t%d\t%.2f\n", n500, len500, N50, gc * 100.0 / total_len);
+    } else {
+        printf("%-25s %13d\n", "# seqs", n);
+        printf("%-25s %13d\n", "# seqs (>=  250 bp)", n250);
+        printf("%-25s %13d\n", "# seqs (>=  500 bp)", n500);
+        printf("%-25s %13d\n", "# seqs (>= 1000 bp)", n1k);
+        printf("%-25s %13s\n", "", "T..G..M..K..");
+        printf("%-25s %13" PRIu64 "\n", "Total length", total_len);
+        printf("%-25s %13" PRIu64 "\n", "Total length (>=  250 bp)", len250);
+        printf("%-25s %13" PRIu64 "\n", "Total length (>=  500 bp)", len500);
+        printf("%-25s %13" PRIu64 "\n", "Total length (>= 1000 bp)", len1k);
+    
+        printf("%-25s %13d (%" PRIu64 " occurrences)\n", "Max length", max, max_cnt);
+        printf("%-25s %13d (%" PRIu64 " occurrences)\n", "Min length", min, min_cnt);
+        printf("%-25s %13d\n", "Median length", median);
+        printf("%-25s %13d\n", "N50", N50);
+        printf("%-25s %13d\n", "# unique lengths", uniq_lens);
+        printf("%-25s %13.2f\n", "GC (%)", gc * 100.0 / total_len);
+        printf("%-25s %13.2f\n", "# N's per 100 kbp", uncertain / (total_len / 100000.0));
+    }
+    
 
+    free(cnt_keys);
+    free(cnt_vals);
+
+	kh_destroy(cnt, h);
 	kseq_destroy(seq);
 	gzclose(fp);
 	return 0;
