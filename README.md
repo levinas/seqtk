@@ -1,6 +1,8 @@
 Introduction
 ------------
 
+This is a forked version of Heng Li's seqtk tool. Minor modifications were added to support trimming and summarizing. 
+
 Seqtk is a fast and lightweight tool for processing sequences in the FASTA or FASTQ format. It seamlessly parses both FASTA and FASTQ files which can also be optionally compressed by gzip.
 
 Examples
